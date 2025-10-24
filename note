@@ -1,0 +1,11 @@
+###
+
+PROJECT_REF=supmizsuacewcjefasqq               # e.g. supmizsuacewcjefasqq
+SERVICE_ROLE_KEY=e4f71d782e234d070cf42ae48ad8e9eabb746de72bd80266df5a3d801b146f69 # wrap in single quotes
+
+supabase link --project-ref $PROJECT_REF
+supabase secrets set PROJECT_URL=https://$PROJECT_REF.supabase.co SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY
+supabase functions deploy buy --no-verify-jwt
+supabase functions list
+
+###
