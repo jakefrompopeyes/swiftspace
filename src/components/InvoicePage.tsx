@@ -21,6 +21,17 @@ type InvoiceDto = {
   public_token: string;
 };
 
+function eip681(inv: InvoiceDto): string | null {
+  const net = (inv.network || '').toLowerCase();
+  const address = (inv.to_address || '').trim();
+  if (!address) return null;
+  // Minimal fallback: return address for non-Solana; wallets will parse
+  if (net === 'ethereum') {
+    return `ethereum:${address}`;
+  }
+  return address;
+}
+
 async function fetchInvoice(token: string): Promise<{ invoice: InvoiceDto | null, siblings: Array<{ currency: string; public_token: string }> }> {
   // Call the Edge Function directly via GET to avoid method mismatch
   const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL as string;
@@ -306,9 +317,7 @@ export function InvoicePage() {
             </>
           )}
           <div className="text-sm text-gray-600">{invoice.network || 'network'}</div>
-          {(invoice.network || '').toLowerCase() === 'solana' && (
-            <div className="text-xs text-gray-500 mt-1">Merchant 99% • Platform 1%</div>
-          )}
+          {/* No platform fee */}
         </div>
 
         <div className="flex items-start gap-6">

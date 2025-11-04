@@ -11,6 +11,7 @@ import { Analytics } from './Analytics';
 import { Transactions } from './Transactions';
 import { Invoices } from './Invoices';
 import { ButtonsWidgets } from './ButtonsWidgets';
+import { Billing } from './Billing';
 
 // Mock data for charts (used in other sections)
 
@@ -91,7 +92,14 @@ interface DashboardProps {
 }
 
 export function Dashboard({ onNavigateHome, onLogout }: DashboardProps) {
-  const [activeNav, setActiveNav] = useState('Dashboard');
+  const [activeNav, setActiveNav] = useState(() => {
+    try {
+      const url = new URL(window.location.href);
+      const billing = url.searchParams.get('billing');
+      if (billing === 'upgrade_required') return 'Billing';
+    } catch {}
+    return 'Dashboard';
+  });
   const SUPPORTED_CURRENCIES = ['SOL', 'USDC', 'USDT'];
   const [wallets, setWallets] = useState<Record<string, string>>(
     Object.fromEntries(SUPPORTED_CURRENCIES.map((c) => [c, ''])) as Record<string, string>,
@@ -129,6 +137,11 @@ export function Dashboard({ onNavigateHome, onLogout }: DashboardProps) {
     public_token?: string;
   }>>([]);
 
+  // Billing state
+  const [planTier, setPlanTier] = useState<string>('trial');
+  const [trialEndsAt, setTrialEndsAt] = useState<string | null>(null);
+  const [gmvCents, setGmvCents] = useState<number>(0);
+
   useEffect(() => {
     async function loadWallets() {
       const { data: userData } = await supabase.auth.getUser();
@@ -149,6 +162,37 @@ export function Dashboard({ onNavigateHome, onLogout }: DashboardProps) {
       setVisibleWallets(preset);
     }
     loadWallets();
+  }, []);
+
+  useEffect(() => {
+    async function loadBilling() {
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData.user?.id;
+      if (!userId) return;
+      const { data: m } = await supabase
+        .from('merchants')
+        .select('plan_tier, trial_ends_at')
+        .eq('id', userId)
+        .maybeSingle();
+      if (m) {
+        setPlanTier(String((m as any).plan_tier || 'trial'));
+        setTrialEndsAt((m as any).trial_ends_at || null);
+      }
+      const now = new Date();
+      const firstOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+      const yyyy = firstOfMonth.getUTCFullYear();
+      const mm = String(firstOfMonth.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(firstOfMonth.getUTCDate()).padStart(2, '0');
+      const monthStr = `${yyyy}-${mm}-${dd}`;
+      const { data: u } = await supabase
+        .from('merchant_usage_monthly')
+        .select('gmv_cents')
+        .eq('merchant_id', userId)
+        .eq('month', monthStr)
+        .maybeSingle();
+      setGmvCents(Number((u as any)?.gmv_cents || 0));
+    }
+    loadBilling();
   }, []);
 
   useEffect(() => {
@@ -297,6 +341,46 @@ export function Dashboard({ onNavigateHome, onLogout }: DashboardProps) {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
     if (!userId) return;
+
+    // Subscription entitlement pre-check (mirrors backend gating)
+    try {
+      const now = new Date();
+      const { data: merchant } = await supabase
+        .from('merchants')
+        .select('plan_tier, trial_ends_at')
+        .eq('id', userId)
+        .maybeSingle();
+      const tier = String((merchant as any)?.plan_tier || 'trial');
+      const trialEnds = (merchant as any)?.trial_ends_at ? new Date(String((merchant as any).trial_ends_at)) : null;
+      const trialActive = trialEnds ? trialEnds > now : false;
+      if (!trialActive && (tier === 'basic_50' || tier === 'trial')) {
+        const firstOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+        const yyyy = firstOfMonth.getUTCFullYear();
+        const mm = String(firstOfMonth.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(firstOfMonth.getUTCDate()).padStart(2, '0');
+        const monthStr = `${yyyy}-${mm}-${dd}`;
+        const { data: usage } = await supabase
+          .from('merchant_usage_monthly')
+          .select('gmv_cents')
+          .eq('merchant_id', userId)
+          .eq('month', monthStr)
+          .maybeSingle();
+        const gmvCents = Number((usage as any)?.gmv_cents || 0);
+        if (gmvCents >= 1_000_000) {
+          setStatusText('Monthly GMV reached $10,000. Upgrade to Pro to continue.');
+          // Quick path to Billing tab
+          setTimeout(() => setActiveNav('Billing'), 1000);
+          setTimeout(() => setStatusText(''), 4000);
+          return;
+        }
+      }
+      if (tier === 'past_due' || tier === 'canceled') {
+        setStatusText('Subscription inactive. Manage billing to continue.');
+        setTimeout(() => setActiveNav('Billing'), 1000);
+        setTimeout(() => setStatusText(''), 4000);
+        return;
+      }
+    } catch {}
     const expiresAt = expiresMinutes ? new Date(Date.now() + Number(expiresMinutes) * 60_000).toISOString() : null;
 
     const rows = currenciesToUse.map((sym) => ({
@@ -338,7 +422,7 @@ export function Dashboard({ onNavigateHome, onLogout }: DashboardProps) {
         </div>
 
         <nav className="flex-1 space-y-2">
-          {['Dashboard', 'Invoices', 'Analytics', 'Transactions', 'Buttons & Widgets'].map((item) => (
+          {['Dashboard', 'Invoices', 'Analytics', 'Transactions', 'Buttons & Widgets', 'Billing'].map((item) => (
             <button
               key={item}
               onClick={() => setActiveNav(item)}
@@ -762,11 +846,38 @@ export function Dashboard({ onNavigateHome, onLogout }: DashboardProps) {
         </div>
         </>
         )}
+        {activeNav === 'Billing' && (
+          <div className="space-y-6">
+            <Billing />
+          </div>
+        )}
       </div>
 
       {/* Right Sidebar */}
       {activeNav === 'Dashboard' && (
       <div className="w-[320px] bg-[#f5f5f5] rounded-3xl p-6 space-y-6">
+        {/* Plan & Usage */}
+        <div className="bg-white rounded-2xl p-4 border border-gray-200">
+          <div className="flex items-center justify-between mb-2">
+            <h3>Plan</h3>
+            <Badge className={
+              planTier === 'pro_100' ? 'bg-[#b1ff0a] text-black' :
+              planTier === 'basic_50' ? 'bg-[#225aeb] text-white' :
+              planTier === 'trial' ? 'bg-[#a54df1] text-white' : 'bg-gray-500'
+            }>
+              {planTier}
+            </Badge>
+          </div>
+          {trialEndsAt && (
+            <div className="text-xs text-gray-600 mb-2">Trial ends {new Date(trialEndsAt).toLocaleDateString()}</div>
+          )}
+          <div className="text-xs text-gray-600">Monthly GMV</div>
+          <div className="text-sm mb-1">${(gmvCents / 100).toFixed(2)}</div>
+          <div className="w-full h-2 bg-gray-100 rounded-full">
+            <div className="h-2 bg-black rounded-full" style={{ width: `${Math.min(100, Math.round((gmvCents / 1_000_000) * 100))}%` }} />
+          </div>
+          <div className="text-[11px] text-gray-500 mt-1">Progress to $10,000</div>
+        </div>
         {/* Latest Incoming Payments */}
         <div>
           <div className="flex items-center justify-between mb-4">

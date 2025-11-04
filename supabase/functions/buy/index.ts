@@ -52,6 +52,79 @@ Deno.serve(async (req) => {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     });
 
+    // Subscription entitlement gating (optional via feature flag)
+    async function assertMerchantEntitled(merchantId: string): Promise<Response | null> {
+      try {
+        const enabled = (Deno.env.get('SUBSCRIPTIONS_ENABLED') || '').trim() === '1';
+        if (!enabled) return null;
+        if (!merchantId) return null;
+
+        // Fetch merchant subscription state
+        const { data: merchant, error: merr } = await supabase
+          .from('merchants')
+          .select('id, plan_tier, trial_ends_at')
+          .eq('id', merchantId)
+          .maybeSingle();
+        if (merr) return new Response(merr.message, { status: 500 });
+        const now = new Date();
+        if (!merchant) {
+          // No record; allow (treated as trial) to avoid blocking onboarding
+          return null;
+        }
+        const tier = String((merchant as any).plan_tier || 'trial');
+        const trialEnds = (merchant as any).trial_ends_at ? new Date(String((merchant as any).trial_ends_at)) : null;
+        if (trialEnds && trialEnds > now) return null;
+        if (tier === 'pro_100') return null;
+        if (tier === 'canceled' || tier === 'past_due') {
+          return new Response(JSON.stringify({
+            error: 'Subscription inactive. Please renew to continue creating invoices.',
+            code: 'entitlement_blocked',
+          }), { status: 402, headers: { 'content-type': 'application/json' } });
+        }
+
+        if (tier === 'basic_50' || tier === 'trial') {
+          // Check current calendar month GMV
+          const firstOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+          const yyyy = firstOfMonth.getUTCFullYear();
+          const mm = String(firstOfMonth.getUTCMonth() + 1).padStart(2, '0');
+          const dd = String(firstOfMonth.getUTCDate()).padStart(2, '0');
+          const monthStr = `${yyyy}-${mm}-${dd}`; // ISO date
+          const { data: usage, error: uerr } = await supabase
+            .from('merchant_usage_monthly')
+            .select('gmv_cents')
+            .eq('merchant_id', merchantId)
+            .eq('month', monthStr)
+            .maybeSingle();
+          if (uerr) return new Response(uerr.message, { status: 500 });
+          const gmvCents = Number((usage as any)?.gmv_cents || 0);
+          if (gmvCents >= 1_000_000) {
+            // Over threshold for Basic; require upgrade to Pro
+            const supabaseUrl = Deno.env.get('PROJECT_URL') || Deno.env.get('SUPABASE_URL') || '';
+            const projectRef = supabaseUrl ? new URL(supabaseUrl).host.split('.')[0] : '';
+            const portalUrl = projectRef ? `https://${projectRef}.functions.supabase.co/billing-portal` : '';
+            return new Response(JSON.stringify({
+              error: 'Monthly GMV reached $10,000. Upgrade to Pro to continue.',
+              code: 'upgrade_required',
+              upgrade_url: portalUrl || undefined,
+            }), { status: 402, headers: { 'content-type': 'application/json' } });
+          }
+        }
+        return null;
+      } catch (e) {
+        return new Response(`Entitlement check failed: ${e?.message || e}`, { status: 500 });
+      }
+    }
+
+    const entitlement = await assertMerchantEntitled(m);
+    if (entitlement) {
+      if (entitlement.status === 402 && u) {
+        const base = u.endsWith('/') ? u.slice(0, -1) : u;
+        const dest = `${base}/?billing=upgrade_required`;
+        return new Response(null, { status: 302, headers: { Location: dest } });
+      }
+      return entitlement;
+    }
+
     // Find merchant wallet for requested currency
     const { data: wallets, error: werr } = await supabase
       .from('wallets')
@@ -82,15 +155,10 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Apply 1% processing fee to the crypto amount
-    const dec = SYMBOL_DECIMALS[c] ?? 6;
-    let amountWithFee = amountCrypto * 1.01; // +1%
-    amountWithFee = parseFloat(amountWithFee.toFixed(dec));
-
-    // Create invoice (amount is the total including fee)
+    // Create invoice (amount is the exact crypto amount without platform fee)
     const payload: any = {
       user_id: m,
-      amount: amountWithFee,
+      amount: amountCrypto,
       currency: c,
       to_address: toAddress,
       reference: r || null,
@@ -111,10 +179,7 @@ Deno.serve(async (req) => {
     // Prefer redirecting to provided app base URL (e.g., http://localhost:5173 or https://yourapp.com)
     if (u) {
       const base = u.endsWith('/') ? u.slice(0, -1) : u;
-      const totalUsd = aIsUsd ? a * 1.01 : undefined;
-      const extra = aIsUsd
-        ? `&usd=1&v=${encodeURIComponent(String(a))}&vt=${encodeURIComponent(String(totalUsd?.toFixed(2)))}`
-        : '';
+      const extra = aIsUsd ? `&usd=1&v=${encodeURIComponent(String(a))}` : '';
       const dest = `${base}/?t=${token}${extra}`;
       return new Response(null, {
         status: 302,

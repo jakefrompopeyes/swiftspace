@@ -251,7 +251,7 @@ export function LandingPage({ onNavigateAuth }: LandingPageProps) {
             </Badge>
             <h2 className="text-white text-4xl mb-4">Simple, transparent pricing</h2>
             <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-              No hidden fees. No monthly charges. Only pay when you get paid.
+              First month free. Simple monthly plans. Upgrade as you grow.
             </p>
           </div>
 

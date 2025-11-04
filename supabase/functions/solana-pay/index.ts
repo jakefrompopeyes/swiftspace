@@ -1,7 +1,5 @@
 // Supabase Edge Function: solana-pay
-// Builds a single transaction with two SPL-token transfer instructions:
-// 1) buyer ATA -> merchant ATA (merchantAmount = total - fee)
-// 2) buyer ATA -> platform ATA (fee = 1% of total)
+// Builds a single transaction transferring full amount to the merchant (no platform fee)
 //
 // Request (Transaction Request per Solana Pay):
 //   GET /solana-pay?t=<public_token>&account=<buyer_pubkey>
@@ -92,7 +90,6 @@ const SERVICE_ROLE_KEY = Deno.env.get('SERVICE_ROLE_KEY') || Deno.env.get('SUPAB
 const SOLANA_RPC_URL = Deno.env.get('SOLANA_RPC_URL') || 'https://api.mainnet-beta.solana.com';
 const USDC_MINT = Deno.env.get('USDC_MINT') || '';
 const USDT_MINT = Deno.env.get('USDT_MINT') || '';
-const PLATFORM_SOLANA_ADDRESS = Deno.env.get('PLATFORM_SOLANA_ADDRESS') || '';
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
   console.warn('Missing PROJECT_URL/SUPABASE_URL or SERVICE_ROLE_KEY/SUPABASE_SERVICE_ROLE_KEY');
@@ -114,7 +111,7 @@ Deno.serve(async (req: Request) => {
     const buyerParam = (url.searchParams.get('account') || url.searchParams.get('payer') || '').trim();
     const view = url.searchParams.has('view');
     if (!t || !isUuid(t)) return json(400, { error: 'Invalid token' });
-    if (!buyerParam) {
+  if (!buyerParam) {
       if (view) {
         const params = new URLSearchParams(url.search);
         params.delete('view');
@@ -130,7 +127,7 @@ Deno.serve(async (req: Request) => {
       }
       return json(400, { error: 'Missing buyer account (account=)' });
     }
-    if (!PLATFORM_SOLANA_ADDRESS) return json(500, { error: 'PLATFORM_SOLANA_ADDRESS is not configured' });
+    // No platform address needed (no fee transfers)
 
     const { data: inv, error } = await supabase
       .from('invoices')
@@ -144,22 +141,17 @@ Deno.serve(async (req: Request) => {
     const connection = new Connection(SOLANA_RPC_URL, 'confirmed');
     const buyer = new PublicKey(buyerParam);
     const merchantOwner = new PublicKey(inv.to_address);
-    const platformOwner = new PublicKey(PLATFORM_SOLANA_ADDRESS);
 
     const currency = (inv.currency || '').toUpperCase();
     const ix: any[] = [];
 
     if (currency === 'SOL') {
-      // Native SOL: two lamport transfers
-      const LAMPORTS_PER_SOL = 1_000_000_000n;
+      // Native SOL: single lamport transfer to merchant
       const totalLamports = toMinorUnits(Number(inv.amount), 9);
-      const feeLamports = totalLamports / 100n;
-      const merchantLamports = totalLamports - feeLamports;
-      if (merchantLamports <= 0n || feeLamports <= 0n) return json(400, { error: 'Amount too small for 1% fee' });
+      if (totalLamports <= 0n) return json(400, { error: 'Amount too small' });
 
       ix.push(
-        SystemProgram.transfer({ fromPubkey: buyer, toPubkey: merchantOwner, lamports: bigToNumberSafe(merchantLamports) }),
-        SystemProgram.transfer({ fromPubkey: buyer, toPubkey: platformOwner, lamports: bigToNumberSafe(feeLamports) }),
+        SystemProgram.transfer({ fromPubkey: buyer, toPubkey: merchantOwner, lamports: bigToNumberSafe(totalLamports) }),
       );
     } else if (currency === 'USDC' || currency === 'USDT') {
       const mintStr = currency === 'USDC' ? USDC_MINT : USDT_MINT;
@@ -169,17 +161,13 @@ Deno.serve(async (req: Request) => {
       const decimals = mintInfo.decimals;
 
       const totalMinor = toMinorUnits(Number(inv.amount), decimals);
-      const feeMinor = totalMinor / 100n; // 1%
-      const merchantMinor = totalMinor - feeMinor;
-      if (merchantMinor <= 0n || feeMinor <= 0n) return json(400, { error: 'Amount too small for 1% fee' });
+      if (totalMinor <= 0n) return json(400, { error: 'Amount too small' });
 
       const buyerAta = await getAssociatedTokenAddress(mintPk, buyer, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
       const merchantAta = await getAssociatedTokenAddress(mintPk, merchantOwner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
-      const platformAta = await getAssociatedTokenAddress(mintPk, platformOwner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
 
-      const [merchantAtaInfo, platformAtaInfo] = await Promise.all([
+      const [merchantAtaInfo] = await Promise.all([
         connection.getAccountInfo(merchantAta),
-        connection.getAccountInfo(platformAta),
       ]);
       if (!merchantAtaInfo) {
         ix.push(
@@ -193,33 +181,13 @@ Deno.serve(async (req: Request) => {
           ),
         );
       }
-      if (!platformAtaInfo) {
-        ix.push(
-          createAssociatedTokenAccountInstruction(
-            buyer,
-            platformAta,
-            platformOwner,
-            mintPk,
-            TOKEN_PROGRAM_ID,
-            ASSOCIATED_TOKEN_PROGRAM_ID,
-          ),
-        );
-      }
 
       ix.push(
         createTransferInstruction(
           buyerAta,
           merchantAta,
           buyer,
-          bigToNumberSafe(merchantMinor),
-          [],
-          TOKEN_PROGRAM_ID,
-        ),
-        createTransferInstruction(
-          buyerAta,
-          platformAta,
-          buyer,
-          bigToNumberSafe(feeMinor),
+          bigToNumberSafe(totalMinor),
           [],
           TOKEN_PROGRAM_ID,
         ),

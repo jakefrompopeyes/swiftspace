@@ -43,9 +43,11 @@ export function ButtonsWidgets() {
       const present = (data || [])
         .map((r: any) => String(r.currency || '').toUpperCase())
         .filter((s) => !!s);
+      // Restrict to supported set only (SOL/USDC/USDT)
+      const filtered = present.filter((s) => SUPPORTED.includes(s));
       if (!cancelled) {
-        setConfiguredSymbols(present);
-        if (present.length > 0) setAllowedSymbols(present);
+        setConfiguredSymbols(filtered);
+        if (filtered.length > 0) setAllowedSymbols(filtered);
       }
     }
     load();

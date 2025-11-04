@@ -152,6 +152,62 @@
   ```
 
   5) Next steps: wire Supabase Auth UI, save wallets/invoices via Supabase client.
+ 
+## Subscriptions (Stripe)
+
+This app supports subscription-based billing for merchants: one-month free trial, then $50/month (Basic) until monthly GMV hits $10,000, then require $100/month (Pro).
+
+### 1) Database
+
+Run the migration in `supabase/migrations/20251103_billing.sql` to create:
+
+- `merchants`
+- `merchant_usage_monthly`
+- `payments_ledger`
+
+### 2) Stripe setup
+
+Create two prices in Stripe and note their IDs:
+
+- PRICE_BASIC_50 → $50/month
+- PRICE_PRO_100 → $100/month
+
+### 3) Deploy Edge Functions
+
+```
+supabase functions deploy billing-webhook --no-verify-jwt
+supabase functions deploy create-subscription --no-verify-jwt
+supabase functions deploy billing-portal --no-verify-jwt
+```
+
+Set secrets (replace values):
+
+```
+supabase secrets set \
+  PROJECT_URL=https://<your-ref>.supabase.co \
+  SERVICE_ROLE_KEY=<service-role-key> \
+  STRIPE_SECRET_KEY=sk_live_... \
+  STRIPE_WEBHOOK_SECRET=whsec_... \
+  PRICE_BASIC_50=price_... \
+  PRICE_PRO_100=price_... \
+  SUBSCRIPTIONS_ENABLED=1
+```
+
+Point your Stripe webhook to:
+
+```
+https://<your-ref>.functions.supabase.co/billing-webhook
+Events: checkout.session.completed, customer.subscription.created, customer.subscription.updated, customer.subscription.deleted, invoice.paid, invoice.payment_failed
+```
+
+### 4) Usage tracking
+
+The `confirmations` function increments monthly GMV and writes a `payments_ledger` row when invoices become `confirmed`.
+
+### 5) Billing UI
+
+- Dashboard → Billing page shows plan, trial end, GMV progress, and Manage/Upgrade actions.
+- To gate invoice creation via the buy-link function, set `SUBSCRIPTIONS_ENABLED=1`.
   
 ## Buy Button (Create-and-Redirect)
 
