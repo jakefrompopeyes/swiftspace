@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { supabase } from '../lib/supabaseClient';
+import { Check, Crown, ArrowUpRight, Zap, TrendingUp } from 'lucide-react';
 
 type MerchantRow = {
   id: string;
@@ -98,45 +99,111 @@ export function Billing() {
 
   if (loading) {
     return (
-      <div className="bg-[#f5f5f5] rounded-3xl p-6">Loading…</div>
+      <div className="bg-[#f5f5f5] rounded-3xl p-8">Loading…</div>
     );
   }
 
   return (
-    <div className="bg-[#f5f5f5] rounded-3xl p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold">Billing</h2>
-        <Badge className={
-          plan === 'pro_100' ? 'bg-[#b1ff0a] text-black' :
-          plan === 'basic_50' ? 'bg-[#225aeb] text-white' :
-          plan === 'trial' ? 'bg-[#a54df1] text-white' : 'bg-gray-500'
-        }>
-          {plan}
-        </Badge>
-      </div>
-
-      {plan === 'trial' && merchant?.trial_ends_at && (
-        <div className="mb-4 text-sm text-gray-600">Trial ends {new Date(merchant.trial_ends_at).toLocaleString()}</div>
-      )}
-
-      <div className="mb-6">
-        <div className="text-sm text-gray-600 mb-1">Monthly GMV</div>
-        <div className="text-2xl">${gmvUsd}</div>
-        <div className="w-full h-3 bg-white rounded-full mt-3">
-          <div className="h-3 rounded-full bg-black" style={{ width: `${gmvProgress}%` }} />
+    <div className="space-y-6">
+      {/* Header card */}
+      <div className="bg-[#f5f5f5] rounded-3xl p-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-9 h-9 rounded-xl bg-black text-white flex items-center justify-center"><Crown className="w-5 h-5" /></div>
+            <h2 className="text-xl font-semibold">Billing & Plan</h2>
+          </div>
+          <div className="text-sm text-gray-600">
+            {plan === 'trial' && merchant?.trial_ends_at ? (
+              <>Trial ends {new Date(merchant.trial_ends_at).toLocaleString()}</>
+            ) : (
+              <>Manage your subscription and monitor usage</>
+            )}
+          </div>
         </div>
-        <div className="text-xs text-gray-500 mt-1">Progress to $10,000</div>
+        <div className="flex items-center gap-3">
+          <Badge className={
+            plan === 'pro_100' ? 'bg-[#b1ff0a] text-black' :
+            plan === 'basic_50' ? 'bg-[#225aeb] text-white' :
+            plan === 'trial' ? 'bg-[#a54df1] text-white' : 'bg-gray-500'
+          }>
+            {plan}
+          </Badge>
+          <Button variant="outline" onClick={openPortal}>
+            Manage Billing <ArrowUpRight className="w-4 h-4 ml-1" />
+          </Button>
+        </div>
       </div>
 
-      <div className="flex gap-3">
-        {(plan === 'trial' || plan === 'basic_50' || plan === 'past_due' || plan === 'canceled') && (
-          <Button className="bg-black text-white hover:bg-gray-800" onClick={() => startSubscription('basic')}>Start/Refresh Basic ($50)</Button>
-        )}
-        <Button className="bg-[#b1ff0a] text-black hover:bg-[#a0ef00]" onClick={() => startSubscription('pro')}>Upgrade to Pro ($100)</Button>
-        <Button variant="outline" onClick={openPortal}>Manage Billing</Button>
+      {/* Usage + Quick actions */}
+      <div className="grid md:grid-cols-3 gap-6">
+        <div className="md:col-span-2 bg-[#f5f5f5] rounded-3xl p-8">
+          <div className="flex items-center justify-between mb-4">
+            <div className="text-sm text-gray-600">Monthly GMV</div>
+            <div className="flex items-center gap-2 text-xs text-gray-500"><TrendingUp className="w-4 h-4" /> ${gmvUsd}</div>
+          </div>
+          <div className="w-full h-4 bg-white rounded-full">
+            <div className="h-4 rounded-full bg-black" style={{ width: `${gmvProgress}%` }} />
+          </div>
+          <div className="text-xs text-gray-500 mt-2">{gmvProgress}% to $10,000 threshold</div>
+        </div>
+        <div className="bg-[#f5f5f5] rounded-3xl p-8">
+          <div className="text-sm text-gray-600 mb-3">Quick actions</div>
+          <div className="space-y-3">
+            {(plan === 'trial' || plan === 'basic_50' || plan === 'past_due' || plan === 'canceled') && (
+              <Button className="w-full bg-black text-white hover:bg-gray-800" onClick={() => startSubscription('basic')}>
+                Start/Refresh Basic ($50)
+              </Button>
+            )}
+            <Button className="w-full bg-[#b1ff0a] text-black hover:bg-[#a0ef00]" onClick={() => startSubscription('pro')}>
+              Upgrade to Pro ($100)
+            </Button>
+            <Button className="w-full" variant="outline" onClick={openPortal}>
+              Manage Billing
+            </Button>
+          </div>
+          {status && <div className="mt-4 text-xs text-gray-600">{status}</div>}
+        </div>
       </div>
 
-      {status && <div className="mt-4 text-sm text-gray-600">{status}</div>}
+      {/* Plan comparison */}
+      <div className="grid md:grid-cols-2 gap-6">
+        <div className="bg-[#f5f5f5] rounded-3xl p-8">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-lg font-semibold">Basic</div>
+            <Badge className="bg-[#225aeb] text-white">$50/mo</Badge>
+          </div>
+          <ul className="space-y-3 text-sm text-gray-700">
+            {[
+              'First month free',
+              'Accept crypto on supported chains',
+              'Dashboard & analytics',
+              'Email support',
+            ].map((t) => (
+              <li key={t} className="flex items-center gap-2"><Check className="w-4 h-4" /> {t}</li>
+            ))}
+          </ul>
+        </div>
+        <div className="bg-[#b1ff0a] rounded-3xl p-8 relative overflow-hidden">
+          <div className="absolute -top-10 -right-10 w-40 h-40 bg-white/40 rounded-full blur-2xl" />
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-lg font-semibold">Pro</div>
+            <Badge className="bg-black text-white">$100/mo</Badge>
+          </div>
+          <ul className="space-y-3 text-sm text-black">
+            {[
+              'No $10k cap (never blocked)',
+              'Priority support',
+              'Advanced analytics',
+              'Billing portal & invoicing tools',
+            ].map((t) => (
+              <li key={t} className="flex items-center gap-2"><Check className="w-4 h-4" /> {t}</li>
+            ))}
+          </ul>
+          <Button className="mt-6 bg-black text-white hover:bg-gray-800" onClick={() => startSubscription('pro')}>
+            Upgrade to Pro <ArrowUpRight className="w-4 h-4 ml-1" />
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
